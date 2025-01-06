@@ -3,6 +3,8 @@ import json
 import web
 import pysilk
 from urllib.parse import urlparse
+import re
+import time
 
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
@@ -110,10 +112,31 @@ class GeWeChatChannel(ChatChannel):
         if reply.type in [ReplyType.TEXT, ReplyType.ERROR, ReplyType.INFO]:
             reply_text = reply.content
             ats = ""
-            if gewechat_message and gewechat_message.is_group:
+            # 获取 no_need_at 配置，默认为 False
+            no_need_at = conf().get("no_need_at", False)
+            # 如果是群聊且不需要@，则ats为空字符串
+            if gewechat_message and gewechat_message.is_group and not no_need_at:
                 ats = gewechat_message.actual_user_id
-            self.client.post_text(self.app_id, receiver, reply_text, ats)
-            logger.info("[gewechat] Do send text to {}: {}".format(receiver, reply_text))
+
+            # 使用 !@! 进行分割
+            split_messages = reply_text.split('!@!')
+            # 过滤空消息和图片链接，并移除前后空格
+            split_messages = [msg.strip() for msg in split_messages 
+                            if msg.strip() and not msg.strip().startswith('< img src=')]
+
+            # 发送消息
+            for index, msg in enumerate(split_messages):
+                if index == 0:
+                    # 第一条消息立即发送
+                    self.client.post_text(self.app_id, receiver, msg, ats)
+                    logger.info("[gewechat] Do send text to {}: {}".format(receiver, msg))
+                else:
+                    # 根据当前消息长度计算延迟
+                    delay = len(msg) * 0.05  # 每个字符0.05秒延迟
+                    time.sleep(delay)
+                    self.client.post_text(self.app_id, receiver, msg, ats)
+                    logger.info("[gewechat] Do send text to {} after {}s delay: {}".format(
+                        receiver, delay, msg))
         elif reply.type == ReplyType.VOICE:
             try:
                 content = reply.content
