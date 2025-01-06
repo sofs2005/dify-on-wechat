@@ -1,7 +1,6 @@
 import os
 import json
 import web
-import pysilk
 from urllib.parse import urlparse
 import re
 import time
@@ -144,9 +143,6 @@ class GeWeChatChannel(ChatChannel):
                     # 如果是mp3文件，转换为silk格式
                     silk_path = content + '.silk'
                     duration = mp3_to_silk(content, silk_path)
-                    if duration is None:
-                        logger.error(f"[gewechat] convert mp3 to silk failed: {content}")
-                        return
                     callback_url = conf().get("gewechat_callback_url")
                     silk_url = callback_url + "?file=" + silk_path
                     self.client.post_voice(self.app_id, receiver, silk_url, duration)
