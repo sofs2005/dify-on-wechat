@@ -112,14 +112,15 @@ class GeWeChatChannel(ChatChannel):
         if reply.type in [ReplyType.TEXT, ReplyType.ERROR, ReplyType.INFO]:
             reply_text = reply.content
             ats = ""
-            # 获取 no_need_at 配置，默认为 False
+            # 从配置文件读取no_need_at配置，如果为True且是群聊，则移除@
             no_need_at = conf().get("no_need_at", False)
-            # 如果是群聊且不需要@，则ats为空字符串
             if gewechat_message and gewechat_message.is_group and not no_need_at:
-                ats = gewechat_message.actual_user_id
+                logger.debug(f"[gewechat] no_need_at is True, will remove @{context.get('msg').actual_user_nickname}")
+                reply_text = re.sub(r'@' + context.get('msg').actual_user_nickname + r'\s?', '', reply_text, count=1)
 
-            # 使用 !@! 进行分割
-            split_messages = reply_text.split('!@!')
+
+            # 使用 !~! 进行分割
+            split_messages = reply_text.split('!~!')
             # 过滤空消息和图片链接，并移除前后空格
             split_messages = [msg.strip() for msg in split_messages 
                             if msg.strip() and not msg.strip().startswith('< img src=')]
