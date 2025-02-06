@@ -5,6 +5,8 @@ import web
 from urllib.parse import urlparse
 import re
 import time
+import cv2
+import requests
 
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
@@ -72,7 +74,7 @@ class GeWeChatChannel(ChatChannel):
             logger.info(f"[gewechat] new app_id saved: {app_id}")
             self.app_id = app_id
 
-        # 获取回调地址，示例地址：http://172.17.0.1:9919/v2/api/callback/collect  
+        # 获取回调地址，示例地址：http://172.17.0.1:9919/v2/api/callback/collect
         callback_url = conf().get("gewechat_callback_url")
         if not callback_url:
             logger.error("[gewechat] callback_url is not set, unable to start callback server")
@@ -96,7 +98,7 @@ class GeWeChatChannel(ChatChannel):
         callback_thread = threading.Thread(target=set_callback, daemon=True)
         callback_thread.start()
 
-        # 从回调地址中解析出端口与url path，启动回调服务器  
+        # 从回调地址中解析出端口与url path，启动回调服务器
         parsed_url = urlparse(callback_url)
         path = parsed_url.path
         # 如果没有指定端口，使用默认端口80
@@ -172,6 +174,124 @@ class GeWeChatChannel(ChatChannel):
             img_url = callback_url + "?file=" + img_file_path
             self.client.post_image(self.app_id, receiver, img_url)
             logger.info("[gewechat] sendImage, receiver={}, url={}".format(receiver, img_url))
+        #   elif reply.type == ReplyType.REVOKE:
+            # 处理撤回消息
+            #logger.info("[gewechat] Do send revoke message to {}".format(receiver))
+            #self.client.post_revoke(self.app_id, receiver)
+        #elif reply.type == ReplyType.EMOJI:
+            # 处理表情消息
+            #logger.info("[gewechat] Do send emoji message to {}".format(receiver))
+            #self.client.post_emoji(self.app_id, receiver, reply.content)
+        #elif reply.type == ReplyType.MINI_PROGRAM:
+            # 处理小程序消息
+            #logger.info("[gewechat] Do send mini program message to {}".format(receiver))
+            #self.client.post_mini_program(self.app_id, receiver, reply.content)
+        #elif reply.type == ReplyType.TRANSFER:
+            # 处理转账消息
+            #logger.info("[gewechat] Do send transfer message to {}".format(receiver))
+            #self.client.post_transfer(self.app_id, receiver, reply.content)
+        #elif reply.type == ReplyType.RED_PACKET:
+            # 处理红包消息
+            #logger.info("[gewechat] Do send red packet message to {}".format(receiver))
+            #self.client.post_red_packet(self.app_id, receiver, reply.content)
+        elif reply.type == ReplyType.VIDEO_URL:
+            video_url = reply.content
+            logger.info("[gewechat] sendVideo url={}, receiver={}".format(video_url, receiver))
+            try:
+                # 下载视频到临时文件
+                tmp_dir = TmpDir().path()
+                temp_video = os.path.join(tmp_dir, f"video_{str(uuid.uuid4())}.mp4")
+                logger.info(f"[gewechat] Downloading video to: {temp_video}")
+                
+                # 下载重试机制
+                max_retries = 3
+                for i in range(max_retries):
+                    try:
+                        response = requests.get(video_url, stream=True)
+                        if response.status_code == 200:
+                            with open(temp_video, "wb") as f:
+                                for chunk in response.iter_content(chunk_size=8192):
+                                    if chunk:
+                                        f.write(chunk)
+                            logger.info("[gewechat] Video downloaded successfully")
+                            break
+                        else:
+                            logger.error(f"[gewechat] Download attempt {i+1} failed with status code: {response.status_code}")
+                            if i == max_retries - 1:
+                                raise Exception(f"Failed to download video after {max_retries} attempts")
+                            time.sleep(1)
+                    except Exception as e:
+                        logger.error(f"[gewechat] Download attempt {i+1} failed: {str(e)}")
+                        if i == max_retries - 1:
+                            raise
+                        time.sleep(1)
+                
+                # 获取视频信息
+                logger.info("[gewechat] Getting video info...")
+                cap = cv2.VideoCapture(temp_video)
+                
+                # 获取视频时长（秒）
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                duration = frame_count / fps
+                
+                # 读取第一帧作为缩略图
+                ret, first_frame = cap.read()
+                cap.release()
+                
+                if ret:
+                    # 保存缩略图
+                    thumb_path = os.path.join(tmp_dir, f"thumb_{str(uuid.uuid4())}.jpg")
+                    logger.info(f"[gewechat] Saving thumbnail to: {thumb_path}")
+                    cv2.imwrite(thumb_path, first_frame)
+                    
+                    # 构建本地文件URL
+                    callback_url = conf().get("gewechat_callback_url")
+                    video_local_url = callback_url + "?file=" + temp_video
+                    thumb_local_url = callback_url + "?file=" + thumb_path
+                    
+                    try:
+                        logger.info("[gewechat] Sending video...")
+                        res = self.client.post_video(self.app_id, receiver, video_local_url, thumb_local_url, int(duration))
+                        logger.info(f"[gewechat] Send video response: {res}")
+                        
+                        if isinstance(res, dict):
+                            if res.get("ret") == 200:
+                                logger.info("[gewechat] Video sent successfully")
+                            else:
+                                error_msg = res.get("msg", "未知错误")
+                                logger.error(f"[gewechat] Failed to send video: {error_msg}")
+                                self.client.post_text(self.app_id, receiver, f"视频发送失败：{error_msg}")
+                        else:
+                            logger.error("[gewechat] Invalid response format")
+                            self.client.post_text(self.app_id, receiver, "视频发送失败，返回格式错误")
+                    except Exception as e:
+                        logger.error(f"[gewechat] Error sending video: {str(e)}")
+                        self.client.post_text(self.app_id, receiver, "视频发送失败，请稍后重试")
+                    finally:
+                        # 清理临时文件
+                        try:
+                            os.remove(temp_video)
+                            os.remove(thumb_path)
+                        except:
+                            pass
+                else:
+                    logger.error("[gewechat] Failed to get video frame")
+                    self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
+
+            except Exception as e:
+                logger.error(f"[gewechat] Failed to process video: {str(e)}")
+                self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
+                return
+                
+        elif reply.type == ReplyType.FILE:
+            # 处理文件消息
+            file_url = reply.content
+            file_name = file_url.split('/')[-1]  # 从URL中获取文件名
+            logger.info(f"[gewechat] sendFile url={file_url}, name={file_name}, receiver={receiver}")
+            self.client.post_file(self.app_id, receiver, file_url, file_name)
+        else:
+            logger.error(f"[gewechat] Unsupported reply type: {reply.type}")
 
 class Query:
     def GET(self):
@@ -201,14 +321,14 @@ class Query:
         web_data = web.data()
         logger.debug("[gewechat] receive data: {}".format(web_data))
         data = json.loads(web_data)
-        
+
         # gewechat服务发送的回调测试消息
         if isinstance(data, dict) and 'testMsg' in data and 'token' in data:
             logger.debug(f"[gewechat] 收到gewechat服务发送的回调测试消息")
             return "success"
 
         gewechat_msg = GeWeChatMessage(data, channel.client)
-        
+
         # 微信客户端的状态同步消息
         if gewechat_msg.ctype == ContextType.STATUS_SYNC:
             logger.debug(f"[gewechat] ignore status sync message: {gewechat_msg.content}")
@@ -229,6 +349,111 @@ class Query:
             logger.debug(f"[gewechat] ignore expired message from {gewechat_msg.actual_user_id}: {gewechat_msg.content}")
             return "success"
 
+        # 根据消息类型处理不同的回调消息
+        msg_type = gewechat_msg.msg.get('Data', {}).get('MsgType')
+        if msg_type == 1:  # 文本消息
+            logger.info(f"[gewechat] 收到文本消息: {gewechat_msg.content}")
+        elif msg_type == 3:  # 图片消息
+            logger.info(f"[gewechat] 收到图片消息: {gewechat_msg.content}")
+        elif msg_type == 34:  # 语音消息
+            logger.info(f"[gewechat] 收到语音消息: {gewechat_msg.content}")
+        elif msg_type == 49:  # 引用消息、小程序、公众号等
+            logger.info(f"[gewechat] 收到引用消息或小程序消息: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 系统消息（如撤回消息、拍一拍等）
+            logger.info(f"[gewechat] 收到系统消息: {gewechat_msg.content}")
+        elif msg_type == 10000:  # 群聊通知（如修改群名、更换群主等）
+            logger.info(f"[gewechat] 收到群聊通知: {gewechat_msg.content}")
+        elif msg_type == 37:  # 好友添加请求通知
+            logger.info(f"[gewechat] 收到好友添加请求: {gewechat_msg.content}")
+        elif msg_type == 42:  # 名片消息
+            logger.info(f"[gewechat] 收到名片消息: {gewechat_msg.content}")
+        elif msg_type == 43:  # 视频消息
+            logger.info(f"[gewechat] 收到视频消息: {gewechat_msg.content}")
+        elif msg_type == 47:  # 表情消息
+            logger.info(f"[gewechat] 收到表情消息: {gewechat_msg.content}")
+        elif msg_type == 48:  # 地理位置消息
+            logger.info(f"[gewechat] 收到地理位置消息: {gewechat_msg.content}")
+        elif msg_type == 51:  # 视频号消息
+            logger.info(f"[gewechat] 收到视频号消息: {gewechat_msg.content}")
+        elif msg_type == 2000:  # 转账消息
+            logger.info(f"[gewechat] 收到转账消息: {gewechat_msg.content}")
+        elif msg_type == 2001:  # 红包消息
+            logger.info(f"[gewechat] 收到红包消息: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 撤回消息
+            logger.info(f"[gewechat] 收到撤回消息: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 拍一拍消息
+            logger.info(f"[gewechat] 收到拍一拍消息: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 群公告
+            logger.info(f"[gewechat] 收到群公告: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 群待办
+            logger.info(f"[gewechat] 收到群待办: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 踢出群聊通知
+            logger.info(f"[gewechat] 收到踢出群聊通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 解散群聊通知
+            logger.info(f"[gewechat] 收到解散群聊通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 修改群名称
+            logger.info(f"[gewechat] 收到修改群名称通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 更换群主通知
+            logger.info(f"[gewechat] 收到更换群主通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 群信息变更通知
+            logger.info(f"[gewechat] 收到群信息变更通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 删除好友通知
+            logger.info(f"[gewechat] 收到删除好友通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 退出群聊通知
+            logger.info(f"[gewechat] 收到退出群聊通知: {gewechat_msg.content}")
+        elif msg_type == 10002:  # 掉线通知
+            logger.info(f"[gewechat] 收到掉线通知: {gewechat_msg.content}")
+        else:
+            logger.warning(f"[gewechat] 未知消息类型: {msg_type}, 内容: {gewechat_msg.content}")
+
+
+        # 检查发送者是否在黑名单中
+        # 获取黑名单和白名单
+        nick_name_black_list = conf().get("nick_name_black_list", [])
+        nick_name_white_list = conf().get("nick_name_white_list", [])
+
+        # 获取发送者的信息
+        sender_id = gewechat_msg.from_user_id  # 发送者的微信ID
+        sender_nickname = gewechat_msg.actual_user_nickname  # 发送者的昵称  
+
+        # 仅对私聊消息进行黑白名单检查
+        if not gewechat_msg.is_group:
+            # 检查发送者是否在白名单中
+            is_in_white_list = (
+                sender_nickname in nick_name_white_list
+                or sender_id in nick_name_white_list
+            )
+
+            # 如果发送者在白名单中，直接放行
+            if is_in_white_list:
+                logger.debug(f"[gewechat] 白名单用户放行: {sender_nickname} - ID: {sender_id}")
+                context = channel._compose_context(
+                    gewechat_msg.ctype,
+                    gewechat_msg.content,
+                    isgroup=gewechat_msg.is_group,
+                    msg=gewechat_msg,
+                )
+                if context:
+                    channel.produce(context)
+                return "success"
+
+            # 检查是否所有用户都被列入黑名单
+            if "ALL_USER" in nick_name_black_list:
+                logger.debug(f"[gewechat] 所有用户被列入黑名单，忽略消息: {sender_nickname} - ID: {sender_id}")
+                return "success"
+
+            # 检查发送者是否在黑名单中
+            is_in_black_list = (
+                sender_nickname in nick_name_black_list
+                or sender_id in nick_name_black_list
+            )
+
+            # 如果发送者在黑名单中，忽略消息
+            if is_in_black_list:
+                logger.debug(f"[gewechat] 忽略来自黑名单用户的消息: {sender_nickname} - ID: {sender_id}")
+                return "success"
+
+        # 如果是群聊消息或发送者不在黑名单中，处理消息
         context = channel._compose_context(
             gewechat_msg.ctype,
             gewechat_msg.content,
