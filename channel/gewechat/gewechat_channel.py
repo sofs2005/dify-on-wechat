@@ -124,8 +124,8 @@ class GeWeChatChannel(ChatChannel):
             # 使用 !~! 进行分割
             split_messages = reply_text.split('!~!')
             # 过滤空消息和图片链接，并移除前后空格
-            split_messages = [msg.strip() for msg in split_messages 
-                            if msg.strip() and not msg.strip().startswith('< img src=')]
+            split_messages = [msg.strip() for msg in split_messages
+                  if msg.strip() and not msg.strip().startswith('< img src=') and not msg.strip().startswith('{"files": "') and not msg.strip().startswith('"}')]
 
             # 发送消息
             for index, msg in enumerate(split_messages):
