@@ -116,9 +116,9 @@ class GeWeChatChannel(ChatChannel):
             ats = ""
             # 从配置文件读取no_need_at配置，如果为True且是群聊，则移除@
             no_need_at = conf().get("no_need_at", False)
-            if gewechat_message and gewechat_message.is_group and not no_need_at:
-                logger.debug(f"[gewechat] no_need_at is True, will remove @{context.get('msg').actual_user_nickname}")
-                reply_text = re.sub(r'@' + context.get('msg').actual_user_nickname + r'\s?', '', reply_text, count=1)
+            if gewechat_message and no_need_at and gewechat_message.actual_user_nickname:
+                logger.debug(f"[gewechat] no_need_at is True, will remove @{gewechat_message.actual_user_nickname}")
+                reply_text = re.sub(r'@' + gewechat_message.actual_user_nickname + r'\s?', '', reply_text, count=1)
 
 
             # 使用 !~! 进行分割
