@@ -4,7 +4,6 @@ import json
 import web
 from urllib.parse import urlparse
 import re
-import time
 import cv2
 import requests
 
@@ -232,6 +231,7 @@ class GeWeChatChannel(ChatChannel):
             video_url = reply.content
             logger.info("[gewechat] sendVideo url={}, receiver={}".format(video_url, receiver))
             try:
+                import requests
                 # 下载视频到临时文件
                 tmp_dir = TmpDir().path()
                 temp_video = os.path.join(tmp_dir, f"video_{str(uuid.uuid4())}.mp4")
