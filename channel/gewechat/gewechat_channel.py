@@ -120,7 +120,9 @@ class GeWeChatChannel(ChatChannel):
             no_need_at = conf().get("no_need_at", False)
             if gewechat_message and no_need_at and gewechat_message.actual_user_nickname:
                 logger.debug(f"[gewechat] no_need_at is True, will remove @{gewechat_message.actual_user_nickname}")
-                reply_text = re.sub(r'@' + gewechat_message.actual_user_nickname + r'\s?', '', reply_text, count=1)
+                # 对昵称中的特殊字符进行转义
+                escaped_nickname = re.escape(gewechat_message.actual_user_nickname)
+                reply_text = re.sub(r'@' + escaped_nickname + r'\s?', '', reply_text, count=1)
 
 
             # 使用 !~! 进行分割

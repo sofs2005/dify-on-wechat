@@ -3,6 +3,7 @@ import json
 import os
 import html
 from urllib.parse import urlparse
+import time
 
 import requests
 
@@ -14,25 +15,35 @@ from plugins import *
 
 @plugins.register(
     name="JinaSum",
-    desire_priority=10,
+    desire_priority=20,
     hidden=False,
-    enabled=False,
     desc="Sum url link content with jina reader and llm",
-    version="0.0.1",
-    author="hanfangyuan",
+    version="1.1.0",
+    author="sofs2005",
 )
 class JinaSum(Plugin):
-
-    jina_reader_base = "https://r.jina.ai"
-    open_ai_api_base = "https://api.openai.com/v1"
-    open_ai_model = "gpt-3.5-turbo"
-    max_words = 8000
-    prompt = "我需要对下面引号内文档进行总结，总结输出包括以下三个部分：\n📖 一句话总结\n🔑 关键要点,用数字序号列出3-5个文章的核心内容\n🏷 标签: #xx #xx\n请使用emoji让你的表达更生动\n\n"
-    white_url_list = []
-    black_url_list = [
-        "https://support.weixin.qq.com", # 视频号视频
-        "https://channels-aladin.wxqcloud.qq.com", # 视频号音乐
-    ]
+    """网页内容总结插件
+    
+    功能：
+    1. 自动总结分享的网页内容
+    2. 支持手动触发总结
+    3. 支持群聊和单聊不同处理方式
+    4. 支持黑名单群组配置
+    """
+    # 默认配置
+    DEFAULT_CONFIG = {
+        "jina_reader_base": "https://r.jina.ai",
+        "max_words": 8000,
+        "prompt": "我需要对下面引号内文档进行总结，总结输出包括以下三个部分：\n📖 一句话总结\n🔑 关键要点,用数字序号列出3-5个文章的核心内容\n🏷 标签: #xx #xx\n请使用emoji让你的表达更生动\n\n",
+        "white_url_list": [],
+        "black_url_list": [
+            "https://support.weixin.qq.com",  # 视频号视频
+            "https://channels-aladin.wxqcloud.qq.com",  # 视频号音乐
+        ],
+        "black_group_list": [],
+        "auto_sum": True,
+        "cache_timeout": 300,  # 缓存超时时间（5分钟）
+    }
 
     def __init__(self):
         super().__init__()
@@ -40,66 +51,243 @@ class JinaSum(Plugin):
             self.config = super().load_config()
             if not self.config:
                 self.config = self._load_config_template()
-            self.jina_reader_base = self.config.get("jina_reader_base", self.jina_reader_base)
-            self.open_ai_api_base = self.config.get("open_ai_api_base", self.open_ai_api_base)
-            self.open_ai_api_key = self.config.get("open_ai_api_key", "")
-            self.open_ai_model = self.config.get("open_ai_model", self.open_ai_model)
-            self.max_words = self.config.get("max_words", self.max_words)
-            self.prompt = self.config.get("prompt", self.prompt)
-            self.white_url_list = self.config.get("white_url_list", self.white_url_list)
-            self.black_url_list = self.config.get("black_url_list", self.black_url_list)
+            
+            # 使用默认配置初始化
+            for key, default_value in self.DEFAULT_CONFIG.items():
+                setattr(self, key, self.config.get(key, default_value))
+            
+            # 每次启动时重置缓存
+            self.pending_messages = {}  # 待处理消息缓存
+            
             logger.info(f"[JinaSum] inited, config={self.config}")
             self.handlers[Event.ON_HANDLE_CONTEXT] = self.on_handle_context
         except Exception as e:
             logger.error(f"[JinaSum] 初始化异常：{e}")
             raise "[JinaSum] init failed, ignore "
 
-    def on_handle_context(self, e_context: EventContext, retry_count: int = 0):
-        try:
-            context = e_context["context"]
-            content = context.content
-            if context.type != ContextType.SHARING and context.type != ContextType.TEXT:
+    def on_handle_context(self, e_context: EventContext):
+        """处理消息"""
+        context = e_context['context']
+        if context.type not in [ContextType.TEXT, ContextType.SHARING]:
+            return
+
+        content = context.content
+        channel = e_context['channel']
+        msg = e_context['context']['msg']
+        chat_id = msg.from_user_id
+        is_group = msg.is_group
+
+        # 检查是否需要自动总结
+        should_auto_sum = self.auto_sum
+        if should_auto_sum and is_group and msg.from_user_nickname in self.black_group_list:
+            should_auto_sum = False
+
+        # 清理过期缓存
+        self._clean_expired_cache()
+
+        # 处理分享消息
+        if context.type == ContextType.SHARING:
+            logger.debug("[JinaSum] Processing SHARING message")
+            if is_group:
+                if should_auto_sum:
+                    return self._process_summary(content, e_context, retry_count=0)
+                else:
+                    self.pending_messages[chat_id] = {
+                        "content": content,
+                        "timestamp": time.time()
+                    }
+                    logger.debug(f"[JinaSum] Cached SHARING message: {content}, chat_id={chat_id}")
+                    return
+            else:  # 单聊消息直接处理
+                return self._process_summary(content, e_context, retry_count=0)
+
+        # 处理文本消息
+        elif context.type == ContextType.TEXT:
+            logger.debug("[JinaSum] Processing TEXT message")
+            content = content.strip()
+            
+            # 移除可能的@信息
+            if content.startswith("@"):
+                parts = content.split(" ", 1)
+                if len(parts) > 1:
+                    content = parts[1].strip()
+                else:
+                    content = ""
+            
+            # 检查是否包含"总结"关键词（仅群聊需要）
+            if is_group and "总结" in content:
+                logger.debug(f"[JinaSum] Found summary trigger, pending_messages={self.pending_messages}")
+                if chat_id in self.pending_messages:
+                    cached_content = self.pending_messages[chat_id]["content"]
+                    logger.debug(f"[JinaSum] Processing cached content: {cached_content}")
+                    del self.pending_messages[chat_id]
+                    return self._process_summary(cached_content, e_context, retry_count=0, skip_notice=True)
+                
+                # 检查是否是直接URL总结，移除"总结"并检查剩余内容是否为URL
+                url = content.replace("总结", "").strip()
+                if url and self._check_url(url):
+                    logger.debug(f"[JinaSum] Processing direct URL: {url}")
+                    return self._process_summary(url, e_context, retry_count=0)
+                logger.debug("[JinaSum] No content to summarize")
                 return
+            
+            # 单聊中直接处理URL
+            if not is_group and self._check_url(content):
+                return self._process_summary(content, e_context, retry_count=0)
+
+    def _clean_expired_cache(self):
+        """清理过期的缓存"""
+        current_time = time.time()
+        # 清理待处理消息缓存
+        expired_keys = [
+            k for k, v in self.pending_messages.items() 
+            if current_time - v["timestamp"] > self.cache_timeout
+        ]
+        for k in expired_keys:
+            del self.pending_messages[k]
+
+    def _process_summary(self, content: str, e_context: EventContext, retry_count: int = 0, skip_notice: bool = False):
+        """处理总结请求
+        
+        Args:
+            content: 要处理的内容
+            e_context: 事件上下文
+            retry_count: 重试次数
+            skip_notice: 是否跳过提示消息
+        """
+        try:
             if not self._check_url(content):
                 logger.debug(f"[JinaSum] {content} is not a valid url, skip")
                 return
-            if retry_count == 0:
-                logger.debug("[JinaSum] on_handle_context. content: %s" % content)
+                
+            if retry_count == 0 and not skip_notice:
+                logger.debug("[JinaSum] Processing URL: %s" % content)
                 reply = Reply(ReplyType.TEXT, "🎉正在为您生成总结，请稍候...")
                 channel = e_context["channel"]
-                channel.send(reply, context)
+                channel.send(reply, e_context["context"])
 
-            target_url = html.unescape(content) # 解决公众号卡片链接校验问题，参考 https://github.com/fatwang2/sum4all/commit/b983c49473fc55f13ba2c44e4d8b226db3517c45
+            # 获取网页内容
+            target_url = html.unescape(content)
             jina_url = self._get_jina_url(target_url)
+            logger.debug(f"[JinaSum] Requesting jina url: {jina_url}")
+            
             headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"}
-            response = requests.get(jina_url, headers=headers, timeout=60)
-            response.raise_for_status()
-            target_url_content = response.text
-
-            openai_chat_url = self._get_openai_chat_url()
-            openai_headers = self._get_openai_headers()
-            openai_payload = self._get_openai_payload(target_url_content)
-            logger.debug(f"[JinaSum] openai_chat_url: {openai_chat_url}, openai_headers: {openai_headers}, openai_payload: {openai_payload}")
-            response = requests.post(openai_chat_url, headers={**openai_headers, **headers}, json=openai_payload, timeout=60)
-            response.raise_for_status()
-            result = response.json()['choices'][0]['message']['content']
-            reply = Reply(ReplyType.TEXT, result)
+            try:
+                response = requests.get(jina_url, headers=headers, timeout=60)
+                response.raise_for_status()
+                target_url_content = response.text
+                if not target_url_content:
+                    raise ValueError("Empty response from jina reader")
+            except Exception as e:
+                logger.error(f"[JinaSum] Failed to get content from jina reader: {str(e)}")
+                raise
+            
+            # 限制内容长度
+            target_url_content = target_url_content[:self.max_words]
+            logger.debug(f"[JinaSum] Got content length: {len(target_url_content)}")
+            
+            # 构造提示词和内容
+            sum_prompt = f"{self.prompt}\n\n'''{target_url_content}'''"
+            
+            # 修改 context 内容，传递给下一个插件处理
+            e_context['context'].type = ContextType.TEXT
+            e_context['context'].content = sum_prompt
+            
+            try:
+                # 确保设置一个默认的 reply，以防后续插件没有设置
+                default_reply = Reply(ReplyType.TEXT, "抱歉，处理过程中出现错误")
+                e_context["reply"] = default_reply
+                
+                # 继续传递给下一个插件处理
+                e_context.action = EventAction.CONTINUE
+                logger.debug(f"[JinaSum] Passing content to next plugin: length={len(sum_prompt)}")
+                return
+                
+            except Exception as e:
+                logger.warning(f"[JinaSum] Failed to handle context: {str(e)}")
+                # 如果出错，确保有一个 reply
+                error_reply = Reply(ReplyType.ERROR, "处理过程中出现错误")
+                e_context["reply"] = error_reply
+                e_context.action = EventAction.BREAK_PASS
+            
+        except Exception as e:
+            logger.error(f"[JinaSum] Error in processing summary: {str(e)}", exc_info=True)
+            if retry_count < 3:
+                logger.info(f"[JinaSum] Retrying {retry_count + 1}/3...")
+                return self._process_summary(content, e_context, retry_count + 1)
+            reply = Reply(ReplyType.ERROR, f"无法获取该内容: {str(e)}")
             e_context["reply"] = reply
             e_context.action = EventAction.BREAK_PASS
 
-        except Exception as e:
-            if retry_count < 3:
-                logger.warning(f"[JinaSum] {str(e)}, retry {retry_count + 1}")
-                self.on_handle_context(e_context, retry_count + 1)
-                return
+    def _process_question(self, question: str, chat_id: str, e_context: EventContext, retry_count: int = 0):
+        """处理用户提问"""
+        try:
+            # 获取最近总结的内容
+            recent_content = None
+            recent_timestamp = 0
+            
+            # 遍历所有缓存找到最近总结的内容
+            for url, cache_data in self.content_cache.items():
+                if cache_data["timestamp"] > recent_timestamp:
+                    recent_timestamp = cache_data["timestamp"]
+                    recent_content = cache_data["content"]
+            
+            if not recent_content or time.time() - recent_timestamp > self.content_cache_timeout:
+                logger.debug(f"[JinaSum] No valid content cache found or content expired")
+                return  # 找不到相关文章，让后续插件处理问题
+            
+            if retry_count == 0:
+                reply = Reply(ReplyType.TEXT, "🤔 正在思考您的问题，请稍候...")
+                channel = e_context["channel"]
+                channel.send(reply, e_context["context"])
 
-            logger.exception(f"[JinaSum] {str(e)}")
-            reply = Reply(ReplyType.ERROR, "我暂时无法总结链接，请稍后再试")
+            # 准备问答请求
+            openai_chat_url = self._get_openai_chat_url()
+            openai_headers = self._get_openai_headers()
+            
+            # 构建问答的 prompt
+            qa_prompt = self.qa_prompt.format(
+                content=recent_content[:self.max_words],
+                question=question
+            )
+            
+            openai_payload = {
+                'model': self.open_ai_model,
+                'messages': [{"role": "user", "content": qa_prompt}]
+            }
+            
+            # 调用 API 获取回答
+            response = requests.post(openai_chat_url, headers=openai_headers, json=openai_payload, timeout=60)
+            response.raise_for_status()
+            answer = response.json()['choices'][0]['message']['content']
+            
+            reply = Reply(ReplyType.TEXT, answer)
+            e_context["reply"] = reply
+            e_context.action = EventAction.BREAK_PASS
+            
+        except Exception as e:
+            logger.error(f"[JinaSum] Error in processing question: {str(e)}")
+            if retry_count < 3:
+                return self._process_question(question, chat_id, e_context, retry_count + 1)
+            reply = Reply(ReplyType.ERROR, f"抱歉，处理您的问题时出错: {str(e)}")
             e_context["reply"] = reply
             e_context.action = EventAction.BREAK_PASS
 
     def get_help_text(self, verbose, **kwargs):
-        return f'使用jina reader和ChatGPT总结网页链接内容'
+        help_text = "网页内容总结插件:\n"
+        help_text += "1. 发送「总结 网址」可以总结指定网页的内容\n"
+        help_text += "2. 单聊时分享消息会自动总结\n"
+        if self.auto_sum:
+            help_text += "3. 群聊中分享消息默认自动总结"
+            if self.black_group_list:
+                help_text += "（部分群组需要发送含「总结」的消息触发）\n"
+            else:
+                help_text += "\n"
+        else:
+            help_text += "3. 群聊中收到分享消息后，发送包含「总结」的消息即可触发总结\n"
+        help_text += f"4. 总结完成后5分钟内，可以发送「{self.qa_trigger}xxx」来询问文章相关问题\n"
+        help_text += "注：群聊中的分享消息的总结请求需要在60秒内发出"
+        return help_text
 
     def _load_config_template(self):
         logger.debug("No Suno plugin config.json, use plugins/jina_sum/config.json.template")
@@ -125,7 +313,7 @@ class JinaSum(Plugin):
         }
 
     def _get_openai_payload(self, target_url_content):
-        target_url_content = target_url_content[:self.max_words] # 通过字符串长度简单进行截断
+        target_url_content = target_url_content[:self.max_words] # 通过字符串长度简单行截
         sum_prompt = f"{self.prompt}\n\n'''{target_url_content}'''"
         messages = [{"role": "user", "content": sum_prompt}]
         payload = {
@@ -135,6 +323,14 @@ class JinaSum(Plugin):
         return payload
 
     def _check_url(self, target_url: str):
+        """检查URL是否有效且允许访问
+        
+        Args:
+            target_url: 要检查的URL
+            
+        Returns:
+            bool: URL是否有效且允许访问
+        """
         stripped_url = target_url.strip()
         # 简单校验是否是url
         if not stripped_url.startswith("http://") and not stripped_url.startswith("https://"):
