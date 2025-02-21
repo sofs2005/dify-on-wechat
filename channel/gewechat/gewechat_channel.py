@@ -6,6 +6,8 @@ from urllib.parse import urlparse
 import re
 import cv2
 import requests
+import threading
+import glob
 
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
@@ -16,7 +18,7 @@ from common.singleton import singleton
 from common.tmp_dir import TmpDir
 from config import conf, save_config
 from lib.gewechat import GewechatClient
-from voice.audio_convert import mp3_to_silk
+from voice.audio_convert import mp3_to_silk,split_audio
 import uuid
 
 MAX_UTF8_LEN = 2048
@@ -34,6 +36,11 @@ class GeWeChatChannel(ChatChannel):
             return
         self.token = conf().get("gewechat_token")
         self.client = GewechatClient(self.base_url, self.token)
+
+        # 设置临时文件的最大保留时间（3小时）​
+        self.temp_file_max_age = 3 * 60 * 60  # 秒        ​
+        # 启动定期清理任务​
+        self._start_cleanup_task()
 
         # 如果token为空，尝试获取token
         if not self.token:
@@ -58,6 +65,98 @@ class GeWeChatChannel(ChatChannel):
             logger.warning("[gewechat] download_url is not set, unable to download image")
 
         logger.info(f"[gewechat] init: base_url: {self.base_url}, token: {self.token}, app_id: {self.app_id}, download_url: {self.download_url}")
+
+    def _start_cleanup_task(self):
+        """启动定期清理任务"""
+        def _do_cleanup():
+            while True:
+                try:
+                    # 清理音频文件
+                    self._cleanup_audio_files()
+                    # 清理视频文件
+                    self._cleanup_video_files()
+                    # 清理图片文件
+                    self._cleanup_image_files()
+                    # 每30分钟执行一次清理
+                    time.sleep(240 * 60)
+                except Exception as e:
+                    logger.error(f"[gewechat] 清理任务异常: {e}")
+                    time.sleep(60)  # 发生错误时等待1分钟后重试
+
+        cleanup_thread = threading.Thread(target=_do_cleanup, daemon=True)
+        cleanup_thread.start()
+        logger.info("[gewechat] 清理任务已启动")
+
+    def _cleanup_audio_files(self):
+        """清理过期的音频文件"""
+        try:
+            # 获取临时目录
+            tmp_dir = TmpDir().path()
+            current_time = time.time()
+            # 音频文件最大保留3小时
+            max_age = 3 * 60 * 60  
+
+            # 清理.mp3和.silk文件
+            for ext in ['.mp3', '.silk']:
+                pattern = os.path.join(tmp_dir, f'*{ext}')
+                for fpath in glob.glob(pattern):
+                    try:
+                        # 获取文件修改时间
+                        mtime = os.path.getmtime(fpath)
+                        # 如果文件超过最大保留时间，则删除
+                        if current_time - mtime > max_age:
+                            os.remove(fpath)
+                            logger.debug(f"[gewechat] 清理过期音频文件: {fpath}")
+                    except Exception as e:
+                        logger.warning(f"[gewechat] 清理音频文件失败 {fpath}: {e}")
+
+        except Exception as e:
+            logger.error(f"[gewechat] 音频文件清理任务异常: {e}")
+    
+    def _cleanup_video_files(self):
+        """清理过期的视频文件"""
+        try:
+            tmp_dir = TmpDir().path()
+            current_time = time.time()
+            # 视频文件最大保留3小时
+            max_age = 3 * 60 * 60
+
+            # 清理.mp4文件
+            pattern = os.path.join(tmp_dir, '*.mp4')
+            for fpath in glob.glob(pattern):
+                try:
+                    mtime = os.path.getmtime(fpath)
+                    if current_time - mtime > max_age:
+                        os.remove(fpath)
+                        logger.debug(f"[gewechat] 清理过期视频文件: {fpath}")
+                except Exception as e:
+                    logger.warning(f"[gewechat] 清理视频文件失败 {fpath}: {e}")
+
+        except Exception as e:
+            logger.error(f"[gewechat] 视频文件清理任务异常: {e}")
+
+    def _cleanup_image_files(self):
+        """清理过期的图片文件"""
+        try:
+            tmp_dir = TmpDir().path()
+            current_time = time.time()
+            # 图片文件最大保留3小时
+            max_age = 3 * 60 * 60
+
+            # 清理.png、.jpg、.gif文件
+            for ext in ['.png', '.jpg', '.gif']:
+                pattern = os.path.join(tmp_dir, f'*{ext}')
+                for fpath in glob.glob(pattern):
+                    try:
+                        mtime = os.path.getmtime(fpath)
+                        if current_time - mtime > max_age:
+                            os.remove(fpath)
+                            logger.debug(f"[gewechat] 清理过期图片文件: {fpath}")
+                    except Exception as e:
+                        logger.warning(f"[gewechat] 清理图片文件失败 {fpath}: {e}")
+
+        except Exception as e:
+            logger.error(f"[gewechat] 图片文件清理任务异常: {e}")
 
     def startup(self):
         # 如果app_id为空或登录后获取到新的app_id，保存配置
@@ -106,6 +205,18 @@ class GeWeChatChannel(ChatChannel):
         urls = (path, "channel.gewechat.gewechat_channel.Query")
         app = web.application(urls, globals(), autoreload=False)
         web.httpserver.runsimple(app.wsgifunc(), ("0.0.0.0", port))
+    def get_segment_durations(self, file_paths):
+        """
+        获取每段音频的时长
+        :param file_paths: 分段文件路径列表
+        :return: 每段时长列表（毫秒）
+        """
+        from pydub import AudioSegment
+        durations = []
+        for path in file_paths:
+            audio = AudioSegment.from_file(path)
+            durations.append(len(audio))
+        return durations
 
     def send(self, reply: Reply, context: Context):
         receiver = context["receiver"]
@@ -147,19 +258,82 @@ class GeWeChatChannel(ChatChannel):
         elif reply.type == ReplyType.VOICE:
             try:
                 content = reply.content
-                if content.endswith('.mp3'):
-                    # 如果是mp3文件，转换为silk格式
-                    silk_path = content + '.silk'
-                    duration = mp3_to_silk(content, silk_path)
-                    callback_url = conf().get("gewechat_callback_url")
-                    silk_url = callback_url + "?file=" + silk_path
-                    self.client.post_voice(self.app_id, receiver, silk_url, duration)
-                    logger.info(f"[gewechat] Do send voice to {receiver}: {silk_url}, duration: {duration/1000.0} seconds")
+                if not content or not os.path.exists(content):
+                    logger.error(f"[gewechat] 语音文件未找到: {content}")
                     return
-                else:
-                    logger.error(f"[gewechat] voice file is not mp3, path: {content}, only support mp3")
-            except Exception as e:
-                logger.error(f"[gewechat] send voice failed: {e}")
+
+                if not content.endswith('.mp3'):
+                    logger.error(f"[gewechat] 仅支持MP3格式: {content}")
+                    return
+
+                # 创建临时文件列表用于后续清理
+                temp_files = []
+                
+                try:
+                    # 分割音频文件
+                    audio_length_ms, files = split_audio(content, 60 * 1000)
+                    if not files:
+                        logger.error("[gewechat] 音频分割失败")
+                        return
+                        
+                    temp_files.extend(files)  # 添加分割后的文件到清理列表
+                    logger.info(f"[gewechat] 音频分割完成，共 {len(files)} 段")
+                    
+                    # 获取每段时长
+                    segment_durations = self.get_segment_durations(files)
+                    tmp_dir = TmpDir().path()
+                    
+                    # 预先转换所有文件
+                    silk_files = []
+                    callback_url = conf().get("gewechat_callback_url")
+                    
+                    for i, fcontent in enumerate(files, 1):
+                        try:
+                            # 转换为SILK格式
+                            silk_name = f"{os.path.basename(fcontent)}_{i}.silk"
+                            silk_path = os.path.join(tmp_dir, silk_name)
+                            temp_files.append(silk_path)
+                            
+                            duration = mp3_to_silk(fcontent, silk_path)
+                            if duration > 0 and os.path.exists(silk_path):
+                                silk_url = callback_url + "file=" + silk_path
+                                silk_files.append((silk_url, duration))
+                                logger.info(f"[gewechat] 第 {i} 段转换成功，时长: {duration/1000:.1f}秒")
+                            else:
+                                raise Exception(f"转换失败: {fcontent}")
+                                
+                        except Exception as e:
+                            logger.error(f"[gewechat] 第 {i} 段转换失败: {e}")
+                            return
+                    
+                    # 发送所有语音片段
+                    for i, (silk_url, duration) in enumerate(silk_files, 1):
+                        try:
+                            self.client.post_voice(self.app_id, receiver, silk_url, duration)
+                            logger.info(f"[gewechat] 发送第 {i}/{len(silk_files)} 段语音")
+                            
+                            # 固定0.3秒的发送间隔
+                            if i < len(silk_files):
+                                time.sleep(0.3)
+                                
+                        except Exception as e:
+                            logger.error(f"[gewechat] 发送第 {i} 段语音失败: {e}")
+                            continue
+                except Exception as e:
+                    logger.error(f"[gewechat] {e}")
+                    return
+
+            finally:
+                # 清理所有临时文件
+                for temp_file in temp_files:
+                    try:
+                        if os.path.exists(temp_file):
+                            os.remove(temp_file)
+                            logger.debug(f"[gewechat] 清理临时文件: {temp_file}")
+                    except Exception as e:
+                        logger.warning(f"[gewechat] 清理文件失败 {temp_file}: {e}")
+
+
         elif reply.type == ReplyType.IMAGE_URL or reply.type == ReplyType.IMAGE:
             image_storage = reply.content
             if reply.type == ReplyType.IMAGE_URL:
@@ -498,3 +672,4 @@ class Query:
         if context:
             channel.produce(context)
         return "success"
+
