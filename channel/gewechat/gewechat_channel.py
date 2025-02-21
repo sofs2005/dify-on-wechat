@@ -294,13 +294,22 @@ class GeWeChatChannel(ChatChannel):
                             silk_path = os.path.join(tmp_dir, silk_name)
                             temp_files.append(silk_path)
                             
+                            # 添加详细日志
+                            logger.debug(f"[gewechat] 开始转换MP3到SILK: {fcontent} -> {silk_path}")
                             duration = mp3_to_silk(fcontent, silk_path)
+                            
+                            # 检查转换后的文件
                             if duration > 0 and os.path.exists(silk_path):
-                                silk_url = callback_url + "file=" + silk_path
+                                file_size = os.path.getsize(silk_path)
+                                if file_size == 0:
+                                    raise Exception("生成的SILK文件大小为0")
+                                
+                                logger.debug(f"[gewechat] SILK文件生成成功: 大小={file_size}字节")
+                                silk_url = callback_url + "?file=" + silk_path  # 修复URL格式
                                 silk_files.append((silk_url, duration))
                                 logger.info(f"[gewechat] 第 {i} 段转换成功，时长: {duration/1000:.1f}秒")
                             else:
-                                raise Exception(f"转换失败: {fcontent}")
+                                raise Exception(f"转换失败: duration={duration}, exists={os.path.exists(silk_path)}")
                                 
                         except Exception as e:
                             logger.error(f"[gewechat] 第 {i} 段转换失败: {e}")
