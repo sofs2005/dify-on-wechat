@@ -18,6 +18,7 @@ class ReplyType(Enum):
     VIDEO = 12
     MINIAPP = 13  # 小程序
     ACCEPT_FRIEND = 19 # 接受好友申请
+    APP = 14  # APP消息(音乐卡片等)
 
     def __str__(self):
         return self.name

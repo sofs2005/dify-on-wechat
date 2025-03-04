@@ -8,6 +8,7 @@ import cv2
 import requests
 import threading
 import glob
+import random
 
 from bridge.context import Context, ContextType
 from bridge.reply import Reply, ReplyType
@@ -321,9 +322,11 @@ class GeWeChatChannel(ChatChannel):
                             self.client.post_voice(self.app_id, receiver, silk_url, duration)
                             logger.info(f"[gewechat] 发送第 {i}/{len(silk_files)} 段语音")
                             
-                            # 固定0.3秒的发送间隔
+                            # 随机 0.5-2 秒的发送间隔
                             if i < len(silk_files):
-                                time.sleep(0.3)
+                                delay = random.uniform(0.5, 2.0)
+                                time.sleep(delay)
+                                logger.debug(f"[gewechat] 语音发送间隔: {delay:.1f}秒")
                                 
                         except Exception as e:
                             logger.error(f"[gewechat] 发送第 {i} 段语音失败: {e}")
@@ -391,27 +394,14 @@ class GeWeChatChannel(ChatChannel):
                 new_img_file_path = TmpDir().path() + str(newMsgId) + extension
                 os.rename(img_file_path, new_img_file_path)
                 logger.info("[gewechat] sendImage rename to {}".format(new_img_file_path))
-        
-        #   elif reply.type == ReplyType.REVOKE:
-            # 处理撤回消息
-            #logger.info("[gewechat] Do send revoke message to {}".format(receiver))
-            #self.client.post_revoke(self.app_id, receiver)
-        #elif reply.type == ReplyType.EMOJI:
-            # 处理表情消息
-            #logger.info("[gewechat] Do send emoji message to {}".format(receiver))
-            #self.client.post_emoji(self.app_id, receiver, reply.content)
-        #elif reply.type == ReplyType.MINI_PROGRAM:
-            # 处理小程序消息
-            #logger.info("[gewechat] Do send mini program message to {}".format(receiver))
-            #self.client.post_mini_program(self.app_id, receiver, reply.content)
-        #elif reply.type == ReplyType.TRANSFER:
-            # 处理转账消息
-            #logger.info("[gewechat] Do send transfer message to {}".format(receiver))
-            #self.client.post_transfer(self.app_id, receiver, reply.content)
-        #elif reply.type == ReplyType.RED_PACKET:
-            # 处理红包消息
-            #logger.info("[gewechat] Do send red packet message to {}".format(receiver))
-            #self.client.post_red_packet(self.app_id, receiver, reply.content)
+        elif reply.type == ReplyType.APP:
+            # 处理APP类型消息（如音乐卡片）
+            logger.info("[gewechat] Do send app message to {}".format(receiver))
+            result = self.client.post_app_msg(self.app_id, receiver, reply.content)
+            logger.info("[gewechat] sendApp result={}".format(result))
+            if result.get('ret') != 200:
+                logger.error(f"[gewechat] Failed to send app message: {result}")
+                return
         elif reply.type == ReplyType.VIDEO_URL:
             video_url = reply.content
             logger.info("[gewechat] sendVideo url={}, receiver={}".format(video_url, receiver))

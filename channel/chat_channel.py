@@ -272,6 +272,8 @@ class ChatChannel(Channel):
                     pass
                 elif reply.type == ReplyType.ACCEPT_FRIEND:
                     pass
+                elif reply.type == ReplyType.APP:
+                    pass
                 else:
                     logger.error("[chat_channel] unknown reply type: {}".format(reply.type))
                     return
