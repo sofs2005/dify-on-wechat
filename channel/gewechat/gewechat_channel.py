@@ -395,12 +395,26 @@ class GeWeChatChannel(ChatChannel):
                 os.rename(img_file_path, new_img_file_path)
                 logger.info("[gewechat] sendImage rename to {}".format(new_img_file_path))
         elif reply.type == ReplyType.APP:
-            # 处理APP类型消息（如音乐卡片）
-            logger.info("[gewechat] Do send app message to {}".format(receiver))
-            result = self.client.post_app_msg(self.app_id, receiver, reply.content)
-            logger.info("[gewechat] sendApp result={}".format(result))
-            if result.get('ret') != 200:
-                logger.error(f"[gewechat] Failed to send app message: {result}")
+            try:
+                logger.info("[gewechat] APP message raw content type: {}, content: {}".format(type(reply.content), reply.content))
+                
+                # 直接使用 XML 内容
+                if not isinstance(reply.content, str):
+                    logger.error(f"[gewechat] send app message failed: content must be XML string, got type={type(reply.content)}")
+                    return
+                
+                if not reply.content.strip():
+                    logger.error("[gewechat] send app message failed: content is empty string")
+                    return
+                
+                # 直接发送 appmsg 内容
+                result = self.client.post_app_msg(self.app_id, receiver, reply.content)
+                logger.info("[gewechat] sendApp, receiver={}, content={}, result={}".format(
+                    receiver, reply.content, result))
+                return result
+                
+            except Exception as e:
+                logger.error(f"[gewechat] send app message failed: {str(e)}")
                 return
         elif reply.type == ReplyType.VIDEO_URL:
             video_url = reply.content
