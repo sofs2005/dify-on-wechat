@@ -565,6 +565,10 @@ class Query:
         if gewechat_msg.ctype == ContextType.VOICE:
             if conf().get("speech_recognition") != True:
                 return "success"
+            # 如果是群聊中的语音消息，且group_speech_recognition为False，也忽略
+            if gewechat_msg.is_group and conf().get("group_speech_recognition") != True:
+                logger.debug(f"[gewechat] 忽略群聊中的语音消息，因为group_speech_recognition!=True")
+                return "success"
 
         # 忽略来自自己的消息
         if gewechat_msg.my_msg:

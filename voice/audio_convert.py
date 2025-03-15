@@ -132,27 +132,42 @@ def mp3_to_silk(mp3_path: str, silk_path: str) -> int:
     Returns:
         Duration of the SILK file in milliseconds
     """
-    # First load the MP3 file
-    audio = AudioSegment.from_file(mp3_path)
-    
-    # Convert to mono and set sample rate to 24000Hz
-    # TODO: 下面的参数可能需要调整
-    audio = audio.set_channels(1)
-    audio = audio.set_frame_rate(24000)
-    
-    # Export to PCM
-    pcm_path = os.path.splitext(mp3_path)[0] + '.pcm'
-    audio.export(pcm_path, format='s16le')
-    
-    # Convert PCM to SILK
-    pilk.encode(pcm_path, silk_path, pcm_rate=24000, tencent=True)
-    
-    # Clean up temporary PCM file
-    os.remove(pcm_path)
-    
-    # Get duration of the SILK file
-    duration = pilk.get_duration(silk_path)
-    return duration
+    try:
+        # First load the MP3 file
+        audio = AudioSegment.from_file(mp3_path)
+        
+        # Convert to mono and set sample rate to 24000Hz (WeChat's preferred rate)
+        audio = audio.set_channels(1)
+        audio = audio.set_frame_rate(24000)
+        audio = audio.set_sample_width(2)  # 16-bit audio
+        
+        # Export to PCM with specific parameters
+        pcm_path = os.path.splitext(mp3_path)[0] + '.pcm'
+        audio.export(pcm_path, format='raw')  # 使用raw格式而不是s16le
+        
+        # Convert PCM to SILK using pilk with WeChat compatible settings
+        pilk.encode(pcm_path, silk_path, 
+                   pcm_rate=24000,
+                   tencent=True,  # 使用腾讯的编码参数
+                   silk_rate=24000)  # 确保输出采样率匹配
+        
+        # Clean up temporary PCM file
+        os.remove(pcm_path)
+        
+        # Verify the output file exists and has content
+        if not os.path.exists(silk_path) or os.path.getsize(silk_path) == 0:
+            raise Exception("Generated SILK file is empty or does not exist")
+            
+        # Get duration of the SILK file
+        duration = pilk.get_duration(silk_path)
+        if duration <= 0:
+            raise Exception(f"Invalid duration: {duration}")
+            
+        return duration
+        
+    except Exception as e:
+        logger.error(f"MP3 to SILK conversion failed: {str(e)}")
+        raise
 
 def any_to_amr(any_path, amr_path):
     """

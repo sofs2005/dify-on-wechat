@@ -9,3 +9,6 @@ pre-commit
 web.py-update
 linkai>=0.0.6.0
 cozepy==0.6
+newspaper3k>=0.2.8
+lxml>=4.9.3
+lxml-html-clean>=0.0.2
