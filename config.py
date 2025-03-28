@@ -39,6 +39,7 @@ available_setting = {
     "group_chat_reply_suffix": "",  # 群聊时自动回复的后缀，\n 可以换行
     "group_chat_keyword": [],  # 群聊时包含该关键词则会触发机器人回复
     "group_at_off": False,  # 是否关闭群聊时@bot的触发
+    "respond_to_at_all": False,  # 是否响应@所有人的消息
     "group_name_white_list": ["ChatGPT测试群", "ChatGPT测试群2"],  # 开启自动回复的群名称列表
     "group_name_keyword_white_list": [],  # 开启自动回复的群名称关键词列表
     "group_chat_in_one_session": ["ChatGPT测试群"],  # 支持会话上下文共享的群名称
@@ -134,7 +135,7 @@ available_setting = {
     "azure_voice_region": "japaneast",
     # elevenlabs 语音api配置
     "xi_api_key": "",    #获取ap的方法可以参考https://docs.elevenlabs.io/api-reference/quick-start/authentication
-    "xi_voice_id": "",   #ElevenLabs提供了9种英式、美式等英语发音id，分别是“Adam/Antoni/Arnold/Bella/Domi/Elli/Josh/Rachel/Sam”
+    "xi_voice_id": "",   #ElevenLabs提供了9种英式、美式等英语发音id，分别是"Adam/Antoni/Arnold/Bella/Domi/Elli/Josh/Rachel/Sam"
     # 图像模型设置
     "image_recognition": False, # 是否开启图片识别
     # 服务时间限制，目前支持itchat

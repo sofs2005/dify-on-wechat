@@ -114,7 +114,14 @@ class ChatChannel(Channel):
                             logger.warning(f"[chat_channel] Nickname {nick_name} in In BlackList, ignore")
                             return None
 
-                        logger.info("[chat_channel]receive group at")
+                        # 记录被@的情况
+                        if hasattr(context["msg"], "is_at_all") and context["msg"].is_at_all:
+                            logger.info("[chat_channel] Received group message with @all")
+                            # 对于@所有人的消息，我们已经在gewechat_message.py中处理了不单独@机器人的情况
+                            # 这里只处理同时@所有人和@机器人的场景
+                        else:
+                            logger.info("[chat_channel] Received group message with specific @bot")
+                        
                         if not conf().get("group_at_off", False):
                             flag = True
                         self.name = self.name if self.name is not None else ""  # 部分渠道self.name可能没有赋值
