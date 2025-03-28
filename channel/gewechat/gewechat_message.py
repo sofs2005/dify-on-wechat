@@ -550,36 +550,20 @@ class GeWeChatMessage(ChatMessage):
             # 优先从MsgSource的XML中解析是否被at
             msg_source = self.msg_data.get('MsgSource', '')
             self.is_at = False
-            self.is_at_all = False  # 添加标志，表示是否@所有人
             xml_parsed = False
             if msg_source:
                 try:
                     root = ET.fromstring(msg_source)
                     atuserlist_elem = root.find('atuserlist')
                     if atuserlist_elem is not None and atuserlist_elem.text:
-                        # 检查是否@所有人
-                        if "@@all" in atuserlist_elem.text or "All" in atuserlist_elem.text:
-                            self.is_at_all = True  # 设置@所有人标志
-                            logger.debug(f"[gewechat] Detected @all in message: {atuserlist_elem.text}")
-                        else:
-                            # 仅当不是@所有人时，才设置is_at标志
-                            self.is_at = self.to_user_id in atuserlist_elem.text
+                        self.is_at = self.to_user_id in atuserlist_elem.text
                         xml_parsed = True
                 except ET.ParseError:
                     pass
             # 只有在XML解析失败时才从PushContent中判断
             if not xml_parsed:
-                push_content = self.msg_data.get('PushContent', '')
-                self.is_at_all = '在群聊中@了所有人' in push_content
-                if not self.is_at_all:  # 仅当不是@所有人时，才设置is_at标志
-                    self.is_at = '在群聊中@了你' in push_content
-                logger.debug(f"[gewechat] Parse is_at from PushContent. self.is_at: {self.is_at}, self.is_at_all: {self.is_at_all}")
-            
-            # 如果是@所有人，但没有单独@机器人，并且配置为不响应@所有人，则不回应
-            if self.is_at_all and not self.is_at and not conf().get("respond_to_at_all", False):
-                logger.info(f"[gewechat] Detected @all without specific @bot, ignoring message (respond_to_at_all={conf().get('respond_to_at_all', False)})")
-                self.is_at = False
-            
+                self.is_at = '在群聊中@了你' in self.msg_data.get('PushContent', '')
+                logger.debug(f"[gewechat] Parse is_at from PushContent. self.is_at: {self.is_at}")
             # 确保self.content是字符串后进行替换
             self.content = str(self.content)
             self.content = re.sub(f'{self.actual_user_id}:\n', '', self.content)
