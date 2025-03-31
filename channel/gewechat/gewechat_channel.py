@@ -224,6 +224,21 @@ class GeWeChatChannel(ChatChannel):
         gewechat_message = context.get("msg")
         if reply.type in [ReplyType.TEXT, ReplyType.ERROR, ReplyType.INFO]:
             reply_text = reply.content
+            
+            # 检查是否为特定格式的视频JSON
+            import re
+            video_pattern = r'{"result"\s*:\s*"<video[^>]*><source\s+src=[\'"]([^\'"]+)[\'"][^>]*>[^<]*</video>"\s*}'
+            video_match = re.search(video_pattern, reply_text)
+            
+            if video_match:
+                # 提取视频URL并转为VIDEO_URL类型处理
+                video_url = video_match.group(1)
+                logger.info(f"[gewechat] 检测到视频JSON格式，提取URL: {video_url}")
+                # 调用统一的视频发送方法
+                self._send_video(video_url, receiver)
+                return
+            
+            # 如果不是视频格式，继续处理正常文本消息
             ats = ""
             if gewechat_message and gewechat_message.is_group:
                 ats = gewechat_message.actual_user_id
@@ -235,7 +250,6 @@ class GeWeChatChannel(ChatChannel):
                 # 对昵称中的特殊字符进行转义
                 escaped_nickname = re.escape(gewechat_message.actual_user_nickname)
                 reply_text = re.sub(r'@' + escaped_nickname + r'\s?', '', reply_text, count=1)
-
 
             # 使用 !~! 进行分割
             split_messages = reply_text.split('!~!')
@@ -345,7 +359,6 @@ class GeWeChatChannel(ChatChannel):
                     except Exception as e:
                         logger.warning(f"[gewechat] 清理文件失败 {temp_file}: {e}")
 
-
         elif reply.type == ReplyType.IMAGE_URL or reply.type == ReplyType.IMAGE:
             image_storage = reply.content
             if reply.type == ReplyType.IMAGE_URL:
@@ -419,93 +432,8 @@ class GeWeChatChannel(ChatChannel):
         elif reply.type == ReplyType.VIDEO_URL:
             video_url = reply.content
             logger.info("[gewechat] sendVideo url={}, receiver={}".format(video_url, receiver))
-            try:
-                import requests
-                # 下载视频到临时文件
-                tmp_dir = TmpDir().path()
-                temp_video = os.path.join(tmp_dir, f"video_{str(uuid.uuid4())}.mp4")
-                logger.info(f"[gewechat] Downloading video to: {temp_video}")
-                
-                # 下载重试机制
-                max_retries = 3
-                for i in range(max_retries):
-                    try:
-                        response = requests.get(video_url, stream=True)
-                        if response.status_code == 200:
-                            with open(temp_video, "wb") as f:
-                                for chunk in response.iter_content(chunk_size=8192):
-                                    if chunk:
-                                        f.write(chunk)
-                            logger.info("[gewechat] Video downloaded successfully")
-                            break
-                        else:
-                            logger.error(f"[gewechat] Download attempt {i+1} failed with status code: {response.status_code}")
-                            if i == max_retries - 1:
-                                raise Exception(f"Failed to download video after {max_retries} attempts")
-                            time.sleep(1)
-                    except Exception as e:
-                        logger.error(f"[gewechat] Download attempt {i+1} failed: {str(e)}")
-                        if i == max_retries - 1:
-                            raise
-                        time.sleep(1)
-                
-                # 获取视频信息
-                logger.info("[gewechat] Getting video info...")
-                cap = cv2.VideoCapture(temp_video)
-                
-                # 获取视频时长（秒）
-                fps = cap.get(cv2.CAP_PROP_FPS)
-                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-                duration = frame_count / fps
-                
-                # 读取第一帧作为缩略图
-                ret, first_frame = cap.read()
-                cap.release()
-                
-                if ret:
-                    # 保存缩略图
-                    thumb_path = os.path.join(tmp_dir, f"thumb_{str(uuid.uuid4())}.jpg")
-                    logger.info(f"[gewechat] Saving thumbnail to: {thumb_path}")
-                    cv2.imwrite(thumb_path, first_frame)
-                    
-                    # 构建本地文件URL
-                    callback_url = conf().get("gewechat_callback_url")
-                    video_local_url = callback_url + "?file=" + temp_video
-                    thumb_local_url = callback_url + "?file=" + thumb_path
-                    
-                    try:
-                        logger.info("[gewechat] Sending video...")
-                        res = self.client.post_video(self.app_id, receiver, video_local_url, thumb_local_url, int(duration))
-                        logger.info(f"[gewechat] Send video response: {res}")
-                        
-                        if isinstance(res, dict):
-                            if res.get("ret") == 200:
-                                logger.info("[gewechat] Video sent successfully")
-                            else:
-                                error_msg = res.get("msg", "未知错误")
-                                logger.error(f"[gewechat] Failed to send video: {error_msg}")
-                                self.client.post_text(self.app_id, receiver, f"视频发送失败：{error_msg}")
-                        else:
-                            logger.error("[gewechat] Invalid response format")
-                            self.client.post_text(self.app_id, receiver, "视频发送失败，返回格式错误")
-                    except Exception as e:
-                        logger.error(f"[gewechat] Error sending video: {str(e)}")
-                        self.client.post_text(self.app_id, receiver, "视频发送失败，请稍后重试")
-                    finally:
-                        # 清理临时文件
-                        try:
-                            os.remove(temp_video)
-                            os.remove(thumb_path)
-                        except:
-                            pass
-                else:
-                    logger.error("[gewechat] Failed to get video frame")
-                    self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
-            except Exception as e:
-                logger.error(f"[gewechat] Failed to process video: {str(e)}")
-                self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
-                return
-                
+            # 调用统一的视频发送方法
+            self._send_video(video_url, receiver)
         elif reply.type == ReplyType.FILE:
             # 处理文件消息
             file_url = reply.content
@@ -514,6 +442,100 @@ class GeWeChatChannel(ChatChannel):
             self.client.post_file(self.app_id, receiver, file_url, file_name)
         else:
             logger.error(f"[gewechat] Unsupported reply type: {reply.type}")
+
+    def _send_video(self, video_url, receiver):
+        """
+        统一处理视频发送逻辑
+        :param video_url: 视频URL
+        :param receiver: 接收者
+        """
+        try:
+            import requests
+            # 下载视频到临时文件
+            tmp_dir = TmpDir().path()
+            temp_video = os.path.join(tmp_dir, f"video_{str(uuid.uuid4())}.mp4")
+            logger.info(f"[gewechat] Downloading video to: {temp_video}")
+            
+            # 下载重试机制
+            max_retries = 3
+            for i in range(max_retries):
+                try:
+                    response = requests.get(video_url, stream=True)
+                    if response.status_code == 200:
+                        with open(temp_video, "wb") as f:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    f.write(chunk)
+                        logger.info("[gewechat] Video downloaded successfully")
+                        break
+                    else:
+                        logger.error(f"[gewechat] Download attempt {i+1} failed with status code: {response.status_code}")
+                        if i == max_retries - 1:
+                            raise Exception(f"Failed to download video after {max_retries} attempts")
+                        time.sleep(1)
+                except Exception as e:
+                    logger.error(f"[gewechat] Download attempt {i+1} failed: {str(e)}")
+                    if i == max_retries - 1:
+                        raise
+                    time.sleep(1)
+            
+            # 获取视频信息
+            logger.info("[gewechat] Getting video info...")
+            cap = cv2.VideoCapture(temp_video)
+            
+            # 获取视频时长（秒）
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            duration = frame_count / fps
+            
+            # 读取第一帧作为缩略图
+            ret, first_frame = cap.read()
+            cap.release()
+            
+            if ret:
+                # 保存缩略图
+                thumb_path = os.path.join(tmp_dir, f"thumb_{str(uuid.uuid4())}.jpg")
+                logger.info(f"[gewechat] Saving thumbnail to: {thumb_path}")
+                cv2.imwrite(thumb_path, first_frame)
+                
+                # 构建本地文件URL
+                callback_url = conf().get("gewechat_callback_url")
+                video_local_url = callback_url + "?file=" + temp_video
+                thumb_local_url = callback_url + "?file=" + thumb_path
+                
+                try:
+                    logger.info("[gewechat] Sending video...")
+                    res = self.client.post_video(self.app_id, receiver, video_local_url, thumb_local_url, int(duration))
+                    logger.info(f"[gewechat] Send video response: {res}")
+                    
+                    if isinstance(res, dict):
+                        if res.get("ret") == 200:
+                            logger.info("[gewechat] Video sent successfully")
+                        else:
+                            error_msg = res.get("msg", "未知错误")
+                            logger.warning(f"[gewechat] API返回视频发送失败: {error_msg}，但可能实际已发送成功")
+                            # 不再向用户发送失败提示，因为视频可能已经发送成功
+                    else:
+                        logger.warning("[gewechat] Invalid response format, but video might be sent successfully")
+                except Exception as e:
+                    logger.error(f"[gewechat] Error sending video: {str(e)}")
+                    # 视频可能已发送成功，所以不再发送失败提示
+                finally:
+                    # 清理临时文件
+                    try:
+                        os.remove(temp_video)
+                        os.remove(thumb_path)
+                        logger.debug(f"[gewechat] 清理临时视频文件: {temp_video}")
+                        logger.debug(f"[gewechat] 清理临时缩略图文件: {thumb_path}")
+                    except Exception as e:
+                        logger.warning(f"[gewechat] 清理临时文件失败: {str(e)}")
+                        pass
+            else:
+                logger.error("[gewechat] Failed to get video frame")
+                self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
+        except Exception as e:
+            logger.error(f"[gewechat] Failed to process video: {str(e)}")
+            self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
 
 class Query:
     def GET(self):
