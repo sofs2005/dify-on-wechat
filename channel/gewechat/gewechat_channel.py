@@ -9,8 +9,10 @@ import requests
 import threading
 import glob
 import random
+import io
 
 from bridge.context import Context, ContextType
+from bridge.bridge import Bridge
 from bridge.reply import Reply, ReplyType
 from channel.chat_channel import ChatChannel
 from channel.gewechat.gewechat_message import GeWeChatMessage
@@ -21,6 +23,8 @@ from config import conf, save_config
 from lib.gewechat import GewechatClient
 from voice.audio_convert import mp3_to_silk,split_audio
 import uuid
+import xml.etree.ElementTree as ET
+from common.expired_dict import ExpiredDict
 
 MAX_UTF8_LEN = 2048
 
@@ -38,9 +42,9 @@ class GeWeChatChannel(ChatChannel):
         self.token = conf().get("gewechat_token")
         self.client = GewechatClient(self.base_url, self.token)
 
-        # 设置临时文件的最大保留时间（3小时）​
-        self.temp_file_max_age = 3 * 60 * 60  # 秒        ​
-        # 启动定期清理任务​
+        # 设置临时文件的最大保留时间（3小时）?
+        self.temp_file_max_age = 3 * 60 * 60  # 秒        ?
+        # 启动定期清理任务?
         self._start_cleanup_task()
 
         # 如果token为空，尝试获取token
@@ -66,6 +70,9 @@ class GeWeChatChannel(ChatChannel):
             logger.warning("[gewechat] download_url is not set, unable to download image")
 
         logger.info(f"[gewechat] init: base_url: {self.base_url}, token: {self.token}, app_id: {self.app_id}, download_url: {self.download_url}")
+
+        # 添加引用消息缓存
+        self.msg_cache = ExpiredDict(60 * 3)  # 3分钟过期
 
     def _start_cleanup_task(self):
         """启动定期清理任务"""
@@ -251,8 +258,9 @@ class GeWeChatChannel(ChatChannel):
                 escaped_nickname = re.escape(gewechat_message.actual_user_nickname)
                 reply_text = re.sub(r'@' + escaped_nickname + r'\s?', '', reply_text, count=1)
 
-            # 使用 !~! 进行分割
-            split_messages = reply_text.split('!~!')
+            # 定义分段标记和过滤规则
+            pattern = r'[，。！？；：、,\.!\?;:]*\s*//n\s*[，。！？；：、,\.!\?;:]*'  
+            split_messages = re.split(pattern, reply_text)
             # 过滤空消息和图片链接，并移除前后空格
             split_messages = [msg.strip() for msg in split_messages
                   if msg.strip() and not msg.strip().startswith('< img src=') and not msg.strip().startswith('{"files": "') and not msg.strip().startswith('"}')]
@@ -366,21 +374,31 @@ class GeWeChatChannel(ChatChannel):
                 import io
                 img_url = reply.content
                 logger.debug(f"[gewechat]sendImage, download image start, img_url={img_url}")
-                pic_res = requests.get(img_url, stream=True)
-                image_storage = io.BytesIO()
-                size = 0
-                for block in pic_res.iter_content(1024):
-                    size += len(block)
-                    image_storage.write(block)
-                logger.debug(f"[gewechat]sendImage, download image success, size={size}, img_url={img_url}")
-                image_storage.seek(0)
-                if ".webp" in img_url:
-                    try:
-                        from common.utils import convert_webp_to_png
-                        image_storage = convert_webp_to_png(image_storage)
-                    except Exception as e:
-                        logger.error(f"[gewechat]sendImage, failed to convert image: {e}")
-                        return
+                try:
+                    # 首先尝试直接发送URL
+                    result = self.client.post_image(self.app_id, receiver, img_url)
+                    if result.get('ret') == 200:
+                        logger.info("[gewechat] sendImage success with direct URL")
+                        return                    
+                    # 如果直接发送失败，尝试下载并处理
+                    pic_res = requests.get(img_url, stream=True)
+                    image_storage = io.BytesIO()
+                    size = 0
+                    for block in pic_res.iter_content(1024):
+                        size += len(block)
+                        image_storage.write(block)
+                    logger.debug(f"[gewechat]sendImage, download image success, size={size}, img_url={img_url}")
+                    image_storage.seek(0)
+                    if ".webp" in img_url:
+                        try:
+                            from common.utils import convert_webp_to_png
+                            image_storage = convert_webp_to_png(image_storage)
+                        except Exception as e:
+                            logger.error(f"[gewechat]sendImage, failed to convert image: {e}")
+                            return
+                except Exception as e:
+                    logger.error(f"[gewechat]sendImage, failed to process image: {e}")
+                    return
             # Save image to tmp directory
             image_storage.seek(0)
             header = image_storage.read(6)
@@ -407,6 +425,26 @@ class GeWeChatChannel(ChatChannel):
                 new_img_file_path = TmpDir().path() + str(newMsgId) + extension
                 os.rename(img_file_path, new_img_file_path)
                 logger.info("[gewechat] sendImage rename to {}".format(new_img_file_path))
+        #elif reply.type == ReplyType.REVOKE:
+            # 处理撤回消息
+            #logger.info("[gewechat] Do send revoke message to {}".format(receiver))
+            #self.client.post_revoke(self.app_id, receiver)
+        #elif reply.type == ReplyType.EMOJI:
+            # 处理表情消息
+            #logger.info("[gewechat] Do send emoji message to {}".format(receiver))
+            #self.client.post_emoji(self.app_id, receiver, reply.content)
+        #elif reply.type == ReplyType.MINI_PROGRAM:
+            # 处理小程序消息
+            #logger.info("[gewechat] Do send mini program message to {}".format(receiver))
+            #self.client.post_mini_program(self.app_id, receiver, reply.content)
+        #elif reply.type == ReplyType.TRANSFER:
+            # 处理转账消息
+            #logger.info("[gewechat] Do send transfer message to {}".format(receiver))
+            #self.client.post_transfer(self.app_id, receiver, reply.content)
+        #elif reply.type == ReplyType.RED_PACKET:
+            # 处理红包消息
+            #logger.info("[gewechat] Do send red packet message to {}".format(receiver))
+            #self.client.post_red_packet(self.app_id, receiver, reply.content)
         elif reply.type == ReplyType.APP:
             try:
                 logger.info("[gewechat] APP message raw content type: {}, content: {}".format(type(reply.content), reply.content))
@@ -439,7 +477,42 @@ class GeWeChatChannel(ChatChannel):
             file_url = reply.content
             file_name = file_url.split('/')[-1]  # 从URL中获取文件名
             logger.info(f"[gewechat] sendFile url={file_url}, name={file_name}, receiver={receiver}")
-            self.client.post_file(self.app_id, receiver, file_url, file_name)
+            # 检查是否为本地路径（不是以http://或https://开头）
+            if not file_url.startswith(('http://', 'https://')):
+                # 构建完整URL
+                callback_url = conf().get("gewechat_callback_url")
+                file_url = callback_url + "?file=" + file_url
+                logger.debug(f"[gewechat] File path is local, converted to: {file_url}")
+            
+            # 添加重试机制
+            max_retries = 3
+            for i in range(max_retries):
+                try:
+                    res = self.client.post_file(self.app_id, receiver, file_url, file_name)
+                    
+                    if isinstance(res, dict):
+                        if res.get("ret") == 200:
+                            logger.info("[gewechat] File sent successfully")
+                            break
+                        else:
+                            error_msg = res.get("msg", "未知错误")
+                            logger.error(f"[gewechat] Send attempt {i+1} failed: {error_msg}")
+                            if i == max_retries - 1:  # 最后一次尝试失败
+                                self.client.post_text(self.app_id, receiver, f"文件发送失败：{error_msg}")
+                    else:
+                        logger.error(f"[gewechat] Invalid response format on attempt {i+1}")
+                        if i == max_retries - 1:  # 最后一次尝试失败
+                            self.client.post_text(self.app_id, receiver, "文件发送失败，返回格式错误")
+                            
+                    if i < max_retries - 1:  # 不是最后一次尝试
+                        time.sleep(1)  # 等待1秒后重试
+                        
+                except Exception as e:
+                    logger.error(f"[gewechat] Send attempt {i+1} error: {str(e)}")
+                    if i == max_retries - 1:  # 最后一次尝试失败
+                        self.client.post_text(self.app_id, receiver, "文件发送失败，请稍后重试")
+                    else:
+                        time.sleep(1)  # 等待1秒后重试
         else:
             logger.error(f"[gewechat] Unsupported reply type: {reply.type}")
 
@@ -536,6 +609,96 @@ class GeWeChatChannel(ChatChannel):
         except Exception as e:
             logger.error(f"[gewechat] Failed to process video: {str(e)}")
             self.client.post_text(self.app_id, receiver, "视频处理失败，请稍后重试")
+
+    def _handle_ref_message(self, content_xml, msg_cache):
+        """处理引用消息,返回被引用的消息内容
+        Args:
+            content_xml: 引用消息的XML内容
+            msg_cache: 消息缓存字典
+        Returns:
+            tuple: (success, content, msg_type)
+                success: bool, 是否成功
+                content: 引用消息的内容
+                msg_type: 引用消息的类型
+        """
+        try:
+            # 解析XML获取引用消息ID
+            root = ET.fromstring(content_xml)
+            refermsg = root.find("appmsg").find("refermsg")
+            if refermsg is None:
+                return False, "无效的引用消息", None
+                
+            ref_type = refermsg.find("type").text
+            svrid = refermsg.find("svrid").text
+            
+            if ref_type == "3":  # 图片消息
+                # 从缓存获取图片路径
+                ref_image_msg = msg_cache.get(svrid)
+                path_image = None
+                
+                if ref_image_msg:
+                    ref_image_msg.prepare()
+                    path_image = ref_image_msg.content
+                else:
+                    # 备选路径
+                    path_image_me = TmpDir().path() + svrid + ".png"
+                    if os.path.isfile(path_image_me):
+                        path_image = path_image_me
+                        
+                if not path_image or not os.path.isfile(path_image):
+                    return False, "未找到引用的图片", None
+                    
+                return True, path_image, "image"
+                
+            elif ref_type == "1":  # 文本消息
+                text = refermsg.find("content").text
+                return True, text, "text"
+                
+            return False, "不支持的引用消息类型", None
+            
+        except Exception as e:
+            logger.error(f"[gewechat] Error handling ref message: {str(e)}")
+            return False, f"处理引用消息失败: {str(e)}", None
+
+    def _compose_context(self, ctype: ContextType, content: str, **kwargs) -> Context:
+        """构建消息上下文
+        处理消息类型、缓存图片消息、解析引用消息等
+        """
+        context = super()._compose_context(ctype, content, **kwargs)
+        if not context:
+            return context
+
+        try:
+            msg = kwargs.get("msg")
+            if not hasattr(msg, 'msg'):
+                return context
+
+            raw_msg = msg.msg
+            msg_type = raw_msg.get("Data", {}).get("MsgType")
+            
+            # 缓存图片消息
+            if msg_type == 3:  # 图片消息
+                msg_id = str(raw_msg["Data"]["NewMsgId"])
+                self.msg_cache[msg_id] = msg
+                
+            # 处理引用消息
+            elif msg_type == 49:  # 引用消息
+                content_xml = raw_msg["Data"]["Content"]["string"]
+                xml_start = content_xml.find('<?xml version=')
+                if xml_start != -1:
+                    content_xml = content_xml[xml_start:]
+                
+                # 解析引用消息
+                success, ref_content, ref_type = self._handle_ref_message(content_xml, self.msg_cache)
+                if success:
+                    context["ref_content"] = ref_content
+                    context["ref_type"] = ref_type
+                    logger.debug(f"[gewechat] Added ref message to context: type={ref_type}")
+
+        except Exception as e:
+            logger.error(f"[gewechat] Failed to process message context: {str(e)}")
+
+        return context
 
 class Query:
     def GET(self):
