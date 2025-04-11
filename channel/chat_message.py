@@ -26,6 +26,17 @@ actual_user_id: 实际发送者id (群聊必填)
 actual_user_nickname：实际发送者昵称
 self_display_name: 自身的展示名，设置群昵称时，该字段表示群昵称
 
+- (引用消息相关字段)
+reply_to_message_id: 被引用消息的ID
+reply_to_message_type: 被引用消息的类型 (ContextType)
+reply_to_content: 被引用消息的内容
+reply_to_user_id: 被引用消息的发送者ID
+reply_to_user_nickname: 被引用消息的发送者昵称
+reply_to_media_path: 被引用媒体的本地路径 (仅媒体类型消息)
+reply_to_media_url: 被引用媒体的URL (仅媒体类型消息)
+reply_to_media_id: 被引用媒体的ID (仅媒体类型消息)
+reply_to_metadata: 被引用消息的元数据，字典类型
+
 _prepare_fn: 准备函数，用于准备消息的内容，比如下载图片等,
 _prepared: 是否已经调用过准备函数
 _rawmsg: 原始消息对象
@@ -55,6 +66,17 @@ class ChatMessage(object):
     actual_user_nickname = None
     at_list = None
 
+    # 引用消息相关字段
+    reply_to_message_id = None
+    reply_to_message_type = None
+    reply_to_content = None
+    reply_to_user_id = None
+    reply_to_user_nickname = None
+    reply_to_media_path = None
+    reply_to_media_url = None
+    reply_to_media_id = None
+    reply_to_metadata = None
+
     _prepare_fn = None
     _prepared = False
     _rawmsg = None
@@ -68,7 +90,7 @@ class ChatMessage(object):
             self._prepare_fn()
 
     def __str__(self):
-        return "ChatMessage: id={}, create_time={}, ctype={}, content={}, from_user_id={}, from_user_nickname={}, to_user_id={}, to_user_nickname={}, other_user_id={}, other_user_nickname={}, is_group={}, is_at={}, actual_user_id={}, actual_user_nickname={}, at_list={}".format(
+        return "ChatMessage: id={}, create_time={}, ctype={}, content={}, from_user_id={}, from_user_nickname={}, to_user_id={}, to_user_nickname={}, other_user_id={}, other_user_nickname={}, is_group={}, is_at={}, actual_user_id={}, actual_user_nickname={}, at_list={}, reply_to_message_id={}".format(
             self.msg_id,
             self.create_time,
             self.ctype,
@@ -83,5 +105,6 @@ class ChatMessage(object):
             self.is_at,
             self.actual_user_id,
             self.actual_user_nickname,
-            self.at_list
+            self.at_list,
+            self.reply_to_message_id
         )

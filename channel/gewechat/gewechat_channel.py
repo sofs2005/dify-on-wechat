@@ -102,7 +102,7 @@ class GeWeChatChannel(ChatChannel):
             tmp_dir = TmpDir().path()
             current_time = time.time()
             # 音频文件最大保留3小时
-            max_age = 3 * 60 * 60  
+            max_age = 3 * 60 * 60
 
             # 清理.mp3和.silk文件
             for ext in ['.mp3', '.silk']:
@@ -120,7 +120,7 @@ class GeWeChatChannel(ChatChannel):
 
         except Exception as e:
             logger.error(f"[gewechat] 音频文件清理任务异常: {e}")
-    
+
     def _cleanup_video_files(self):
         """清理过期的视频文件"""
         try:
@@ -231,12 +231,12 @@ class GeWeChatChannel(ChatChannel):
         gewechat_message = context.get("msg")
         if reply.type in [ReplyType.TEXT, ReplyType.ERROR, ReplyType.INFO]:
             reply_text = reply.content
-            
+
             # 检查是否为特定格式的视频JSON
             import re
             video_pattern = r'{"result"\s*:\s*"<video[^>]*><source\s+src=[\'"]([^\'"]+)[\'"][^>]*>[^<]*</video>"\s*}'
             video_match = re.search(video_pattern, reply_text)
-            
+
             if video_match:
                 # 提取视频URL并转为VIDEO_URL类型处理
                 video_url = video_match.group(1)
@@ -244,7 +244,7 @@ class GeWeChatChannel(ChatChannel):
                 # 调用统一的视频发送方法
                 self._send_video(video_url, receiver)
                 return
-            
+
             # 如果不是视频格式，继续处理正常文本消息
             ats = ""
             if gewechat_message and gewechat_message.is_group:
@@ -259,7 +259,7 @@ class GeWeChatChannel(ChatChannel):
                 reply_text = re.sub(r'@' + escaped_nickname + r'\s?', '', reply_text, count=1)
 
             # 定义分段标记和过滤规则
-            pattern = r'[，。！？；：、,\.!\?;:]*\s*//n\s*[，。！？；：、,\.!\?;:]*'  
+            pattern = r'[，。！？；：、,\.!\?;:]*\s*//n\s*[，。！？；：、,\.!\?;:]*'
             split_messages = re.split(pattern, reply_text)
             # 过滤空消息和图片链接，并移除前后空格
             split_messages = [msg.strip() for msg in split_messages
@@ -291,65 +291,65 @@ class GeWeChatChannel(ChatChannel):
 
                 # 创建临时文件列表用于后续清理
                 temp_files = []
-                
+
                 try:
                     # 分割音频文件
                     audio_length_ms, files = split_audio(content, 60 * 1000)
                     if not files:
                         logger.error("[gewechat] 音频分割失败")
                         return
-                        
+
                     temp_files.extend(files)  # 添加分割后的文件到清理列表
                     logger.info(f"[gewechat] 音频分割完成，共 {len(files)} 段")
-                    
+
                     # 获取每段时长
                     segment_durations = self.get_segment_durations(files)
                     tmp_dir = TmpDir().path()
-                    
+
                     # 预先转换所有文件
                     silk_files = []
                     callback_url = conf().get("gewechat_callback_url")
-                    
+
                     for i, fcontent in enumerate(files, 1):
                         try:
                             # 转换为SILK格式
                             silk_name = f"{os.path.basename(fcontent)}_{i}.silk"
                             silk_path = os.path.join(tmp_dir, silk_name)
                             temp_files.append(silk_path)
-                            
+
                             # 添加详细日志
                             logger.debug(f"[gewechat] 开始转换MP3到SILK: {fcontent} -> {silk_path}")
                             duration = mp3_to_silk(fcontent, silk_path)
-                            
+
                             # 检查转换后的文件
                             if duration > 0 and os.path.exists(silk_path):
                                 file_size = os.path.getsize(silk_path)
                                 if file_size == 0:
                                     raise Exception("生成的SILK文件大小为0")
-                                
+
                                 logger.debug(f"[gewechat] SILK文件生成成功: 大小={file_size}字节")
                                 silk_url = callback_url + "?file=" + silk_path  # 修复URL格式
                                 silk_files.append((silk_url, duration))
                                 logger.info(f"[gewechat] 第 {i} 段转换成功，时长: {duration/1000:.1f}秒")
                             else:
                                 raise Exception(f"转换失败: duration={duration}, exists={os.path.exists(silk_path)}")
-                                
+
                         except Exception as e:
                             logger.error(f"[gewechat] 第 {i} 段转换失败: {e}")
                             return
-                    
+
                     # 发送所有语音片段
                     for i, (silk_url, duration) in enumerate(silk_files, 1):
                         try:
                             self.client.post_voice(self.app_id, receiver, silk_url, duration)
                             logger.info(f"[gewechat] 发送第 {i}/{len(silk_files)} 段语音")
-                            
+
                             # 随机 0.5-2 秒的发送间隔
                             if i < len(silk_files):
                                 delay = random.uniform(0.5, 2.0)
                                 time.sleep(delay)
                                 logger.debug(f"[gewechat] 语音发送间隔: {delay:.1f}秒")
-                                
+
                         except Exception as e:
                             logger.error(f"[gewechat] 发送第 {i} 段语音失败: {e}")
                             continue
@@ -379,7 +379,7 @@ class GeWeChatChannel(ChatChannel):
                     result = self.client.post_image(self.app_id, receiver, img_url)
                     if result.get('ret') == 200:
                         logger.info("[gewechat] sendImage success with direct URL")
-                        return                    
+                        return
                     # 如果直接发送失败，尝试下载并处理
                     pic_res = requests.get(img_url, stream=True)
                     image_storage = io.BytesIO()
@@ -448,22 +448,22 @@ class GeWeChatChannel(ChatChannel):
         elif reply.type == ReplyType.APP:
             try:
                 logger.info("[gewechat] APP message raw content type: {}, content: {}".format(type(reply.content), reply.content))
-                
+
                 # 直接使用 XML 内容
                 if not isinstance(reply.content, str):
                     logger.error(f"[gewechat] send app message failed: content must be XML string, got type={type(reply.content)}")
                     return
-                
+
                 if not reply.content.strip():
                     logger.error("[gewechat] send app message failed: content is empty string")
                     return
-                
+
                 # 直接发送 appmsg 内容
                 result = self.client.post_app_msg(self.app_id, receiver, reply.content)
                 logger.info("[gewechat] sendApp, receiver={}, content={}, result={}".format(
                     receiver, reply.content, result))
                 return result
-                
+
             except Exception as e:
                 logger.error(f"[gewechat] send app message failed: {str(e)}")
                 return
@@ -483,13 +483,13 @@ class GeWeChatChannel(ChatChannel):
                 callback_url = conf().get("gewechat_callback_url")
                 file_url = callback_url + "?file=" + file_url
                 logger.debug(f"[gewechat] File path is local, converted to: {file_url}")
-            
+
             # 添加重试机制
             max_retries = 3
             for i in range(max_retries):
                 try:
                     res = self.client.post_file(self.app_id, receiver, file_url, file_name)
-                    
+
                     if isinstance(res, dict):
                         if res.get("ret") == 200:
                             logger.info("[gewechat] File sent successfully")
@@ -503,10 +503,10 @@ class GeWeChatChannel(ChatChannel):
                         logger.error(f"[gewechat] Invalid response format on attempt {i+1}")
                         if i == max_retries - 1:  # 最后一次尝试失败
                             self.client.post_text(self.app_id, receiver, "文件发送失败，返回格式错误")
-                            
+
                     if i < max_retries - 1:  # 不是最后一次尝试
                         time.sleep(1)  # 等待1秒后重试
-                        
+
                 except Exception as e:
                     logger.error(f"[gewechat] Send attempt {i+1} error: {str(e)}")
                     if i == max_retries - 1:  # 最后一次尝试失败
@@ -528,7 +528,7 @@ class GeWeChatChannel(ChatChannel):
             tmp_dir = TmpDir().path()
             temp_video = os.path.join(tmp_dir, f"video_{str(uuid.uuid4())}.mp4")
             logger.info(f"[gewechat] Downloading video to: {temp_video}")
-            
+
             # 下载重试机制
             max_retries = 3
             for i in range(max_retries):
@@ -551,36 +551,36 @@ class GeWeChatChannel(ChatChannel):
                     if i == max_retries - 1:
                         raise
                     time.sleep(1)
-            
+
             # 获取视频信息
             logger.info("[gewechat] Getting video info...")
             cap = cv2.VideoCapture(temp_video)
-            
+
             # 获取视频时长（秒）
             fps = cap.get(cv2.CAP_PROP_FPS)
             frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             duration = frame_count / fps
-            
+
             # 读取第一帧作为缩略图
             ret, first_frame = cap.read()
             cap.release()
-            
+
             if ret:
                 # 保存缩略图
                 thumb_path = os.path.join(tmp_dir, f"thumb_{str(uuid.uuid4())}.jpg")
                 logger.info(f"[gewechat] Saving thumbnail to: {thumb_path}")
                 cv2.imwrite(thumb_path, first_frame)
-                
+
                 # 构建本地文件URL
                 callback_url = conf().get("gewechat_callback_url")
                 video_local_url = callback_url + "?file=" + temp_video
                 thumb_local_url = callback_url + "?file=" + thumb_path
-                
+
                 try:
                     logger.info("[gewechat] Sending video...")
                     res = self.client.post_video(self.app_id, receiver, video_local_url, thumb_local_url, int(duration))
                     logger.info(f"[gewechat] Send video response: {res}")
-                    
+
                     if isinstance(res, dict):
                         if res.get("ret") == 200:
                             logger.info("[gewechat] Video sent successfully")
@@ -627,15 +627,15 @@ class GeWeChatChannel(ChatChannel):
             refermsg = root.find("appmsg").find("refermsg")
             if refermsg is None:
                 return False, "无效的引用消息", None
-                
+
             ref_type = refermsg.find("type").text
             svrid = refermsg.find("svrid").text
-            
+
             if ref_type == "3":  # 图片消息
                 # 从缓存获取图片路径
                 ref_image_msg = msg_cache.get(svrid)
                 path_image = None
-                
+
                 if ref_image_msg:
                     ref_image_msg.prepare()
                     path_image = ref_image_msg.content
@@ -644,18 +644,18 @@ class GeWeChatChannel(ChatChannel):
                     path_image_me = TmpDir().path() + svrid + ".png"
                     if os.path.isfile(path_image_me):
                         path_image = path_image_me
-                        
+
                 if not path_image or not os.path.isfile(path_image):
                     return False, "未找到引用的图片", None
-                    
+
                 return True, path_image, "image"
-                
+
             elif ref_type == "1":  # 文本消息
                 text = refermsg.find("content").text
                 return True, text, "text"
-                
+
             return False, "不支持的引用消息类型", None
-            
+
         except Exception as e:
             logger.error(f"[gewechat] Error handling ref message: {str(e)}")
             return False, f"处理引用消息失败: {str(e)}", None
@@ -675,19 +675,19 @@ class GeWeChatChannel(ChatChannel):
 
             raw_msg = msg.msg
             msg_type = raw_msg.get("Data", {}).get("MsgType")
-            
+
             # 缓存图片消息
             if msg_type == 3:  # 图片消息
                 msg_id = str(raw_msg["Data"]["NewMsgId"])
                 self.msg_cache[msg_id] = msg
-                
+
             # 处理引用消息
             elif msg_type == 49:  # 引用消息
                 content_xml = raw_msg["Data"]["Content"]["string"]
                 xml_start = content_xml.find('<?xml version=')
                 if xml_start != -1:
                     content_xml = content_xml[xml_start:]
-                
+
                 # 解析引用消息
                 success, ref_content, ref_type = self._handle_ref_message(content_xml, self.msg_cache)
                 if success:
@@ -767,6 +767,13 @@ class Query:
 
         # 根据消息类型处理不同的回调消息
         msg_type = gewechat_msg.msg.get('Data', {}).get('MsgType')
+
+        # 缓存消息以便于引用
+        from common.memory import MESSAGE_CACHE
+        msg_id = str(gewechat_msg.msg_id)
+        MESSAGE_CACHE[msg_id] = gewechat_msg
+        logger.debug(f"[gewechat] 缓存消息 ID: {msg_id}")
+
         if msg_type == 1:  # 文本消息
             logger.info(f"[gewechat] 收到文本消息: {gewechat_msg.content}")
         elif msg_type == 3:  # 图片消息
@@ -830,7 +837,7 @@ class Query:
 
         # 获取发送者的信息
         sender_id = gewechat_msg.from_user_id  # 发送者的微信ID
-        sender_nickname = gewechat_msg.actual_user_nickname  # 发送者的昵称  
+        sender_nickname = gewechat_msg.actual_user_nickname  # 发送者的昵称
 
         # 仅对私聊消息进行黑白名单检查
         if not gewechat_msg.is_group:

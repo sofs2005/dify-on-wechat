@@ -15,6 +15,11 @@ available_setting = {
     "web_ui_port": 7860,
     "web_ui_username": "dow",
     "web_ui_password": "dify-on-wechat",
+    # wxpad配置
+    "wxpad_host": "127.0.0.1",
+    "wxpad_port": 8080,
+    "wxpad_device_name": "dify-wxpad",
+    "ignore_protection": False,  # 添加 ignore_protection 配置项
     # 错误回复消息
     "error_reply": "我暂时遇到了一些问题，请您稍后重试~",
     # openai api配置
