@@ -63,6 +63,14 @@ Dify接入微信生态的**详细教程**请查看文章 [**手摸手教你把 D
 
 欢迎加入 **🤖大模型/知识库/bot交流群**，不仅能及时**获取本项目版本更新**公告，还可以一起**交流AI相关知识**！
 
+另外，最近群里在组织每周AI技术分享，欢迎大家进群观看，另外也欢迎大家报名来分享，**主讲嘉宾可以获得一个月ChatGPT Plus 或 Cursor 会员福利**，欢迎[填写问卷](https://uwyv5qab1jg.feishu.cn/share/base/form/shrcnAOQh3XKVaFTGT6Fg4Eyh0f)报名
+
+往期分享回放
+
+[AI技术分享第一期 dify自定义工具](https://meeting.tencent.com/cw/Kmd8V1OQf6)
+
+[AI技术分享第二期 AI出海](https://meeting.tencent.com/cw/2qPr3OQd1e)
+
 <div align="center">
 
 |<img width="240" src="./docs/images/wechat_group_1.jpg">|<img width="240" src="./docs/images/wechat_group_2.jpg">|
@@ -342,8 +350,26 @@ deepseek和openai可以共用一套api lib，，默认model是`deepseek-chat`
   "open_ai_api_base": "https://api.deepseek.com/v1"
 }
 ```
+## 11. web ui优化
+
+webui启动方式
+- 源码：python web_ui.py
+- docker: 设置环境变量 DIFY_ON_WECHAT_EXEC: 'python web_ui.py'
+- 访问 http://服务器ip:7860 ，输入默认账号密码 dow/dify-on-wechat
+
+可以通过web ui登录退出gewechat微信，查看状态，重启服务
+
+详情请查看文档 [gradio web ui](./docs/webui/README.md)
+
+![image](https://github.com/user-attachments/assets/6735e4e4-bc6d-4b8a-9854-a3dcf877e3eb)
+
+## 12. 同步上游wcf通道
+
+需要Windows环境，接入详情请查看 [chatgpt-on-wechat#2562](https://github.com/zhayujie/chatgpt-on-wechat/pull/2562)
 
 # 更新日志
+- 2025/04/12 修复jina_sum插件无法总结微信链接，感谢 [sofs2005](https://github.com/sofs2005/jina_sum) 的代码；同步上游最新功能，支持 [wcf](https://github.com/lich0821/WeChatFerry) 微信通道
+- 2025/01/24 优化web ui，可以通过web ui登录退出gewechat微信
 - 2025/01/06 修复在微信群中微信账号无法识别命令的bug，感谢[**sofs2005**](https://github.com/sofs2005)贡献的代码
 - 2025/01/04 修复gewechat自动回复公众号等官方账号消息的bug，感谢[**benxiaohai86**](https://github.com/benxiaohai86)提供的过滤思路
 - 2024/12/29 支持gewechat发送语音条消息
