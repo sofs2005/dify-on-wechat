@@ -54,4 +54,8 @@ def create_voice(voice_type):
         from voice.dify.dify_voice import DifyVoice
 
         return DifyVoice()
+    elif voice_type == "tencent":
+        from voice.tencent.tencent_voice import TencentVoice
+
+        return TencentVoice()
     raise RuntimeError
